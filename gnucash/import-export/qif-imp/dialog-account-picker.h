@@ -24,8 +24,6 @@
 #ifndef DIALOG_ACCOUNT_PICKER_H
 #define DIALOG_ACCOUNT_PICKER_H
 
-#include <libguile.h>
-
 #include "assistant-qif-import.h"
 
 gboolean qif_account_picker_dialog (GtkWindow *parent, QIFImportWindow * wind, SCM initial_sel);

@@ -25,14 +25,11 @@
 #ifndef ASSISTANT_QIF_IMPORT_H
 #define ASSISTANT_QIF_IMPORT_H
 
-#include <libguile.h>
 #include <gtk/gtk.h>
 
 /* QIF Import Windows ***********************************************/
 
 typedef struct _qifimportwindow QIFImportWindow;
-
-SCM               gnc_ui_qif_import_assistant_get_mappings(QIFImportWindow * w);
 
 /* The gnc_file_qif_import() routine will pop up a standard file
  *     selection dialogue asking the user to pick a QIF file. If one

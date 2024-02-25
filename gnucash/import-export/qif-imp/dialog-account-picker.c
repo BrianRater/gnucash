@@ -27,7 +27,6 @@
 #include <gtk/gtk.h>
 #include <glib/gi18n.h>
 #include <stdio.h>
-#include <libguile.h>
 
 #include "dialog-account-picker.h"
 #include "dialog-utils.h"
@@ -35,8 +34,6 @@
 #include "gnc-gui-query.h"
 #include "gnc-prefs.h"
 #include "gnc-ui-util.h"
-#include "guile-mappings.h"
-#include "gnc-guile-utils.h"
 #include "gnc-ui.h" /* for GNC_RESPONSE_NEW */
 
 #define GNC_PREFS_GROUP   "dialogs.import.qif.account-picker"
@@ -58,7 +55,7 @@ struct _accountpickerdialog
     GtkWidget       * pwarning;
     GtkWidget       * ok_button;
     QIFImportWindow * qif_wind;
-    SCM               map_entry;
+    SCM               map_entry;     //TODO
     gchar           * selected_name;
 };
 
@@ -181,8 +178,7 @@ build_acct_tree(QIFAccountPickerDialog * picker, QIFImportWindow * import)
     g_return_if_fail(picker && import);
 
     /* Get an account tree with all existing and to-be-imported accounts. */
-    acct_tree = scm_call_1(get_accts,
-                           gnc_ui_qif_import_assistant_get_mappings(import));
+    acct_tree = scm_call_1(get_accts, import);
 
     /* Rebuild the store.
      * NOTE: It is necessary to save a copy of the name to select, because

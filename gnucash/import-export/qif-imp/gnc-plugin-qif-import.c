@@ -129,8 +129,6 @@ gnc_plugin_qif_import_create_plugin (void)
     gnc_new_user_dialog_register_qif_assistant
         ((void (*)())gnc_file_qif_import);
 
-    scm_c_use_module("gnucash qif-import");
-
     /* Add to preferences under Online Banking */
     /* The parameters are; glade file, items to add from glade file - last being the dialog, preference tab name */
     gnc_preferences_add_to_page ("dialog-account-picker.glade", "prefs_table",

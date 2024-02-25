@@ -176,7 +176,7 @@ struct _qifimportwindow
     gboolean  acct_tree_found;
     gboolean  new_book;
 
-    SCM       imported_files;
+    QifData * qifData;
     SCM       selected_file;
 
     SCM       acct_map_info;
@@ -197,7 +197,6 @@ struct _qifimportwindow
 
     SCM       imported_account_tree;
     SCM       match_transactions;
-    SCM       transaction_status;
     int       selected_transaction;
     gchar    *date_format;
 };
@@ -239,7 +238,6 @@ static gboolean gnc_ui_qif_import_skip_date_format (GtkAssistant *assistant, QIF
 void gnc_ui_qif_import_date_valid_cb (GtkWidget *widget, gpointer user_data);
 
 void gnc_ui_qif_import_account_prepare (GtkAssistant *assistant, gpointer user_data);
-static gboolean gnc_ui_qif_import_skip_account (GtkAssistant *assistant, QIFImportWindow *wind);
 void gnc_ui_qif_import_acct_valid_cb (GtkWidget *widget, gpointer user_data);
 void gnc_ui_qif_import_acct_enter_cb (GtkWidget * widget, gpointer user_data);
 
@@ -251,17 +249,14 @@ static void update_file_page (QIFImportWindow * wind);
 
 void gnc_ui_qif_import_account_match_prepare (GtkAssistant *assistant, gpointer user_data);
 void gnc_ui_qif_import_account_doc_prepare (GtkAssistant *assistant, gpointer user_data);
-static gboolean gnc_ui_qif_import_skip_account_doc (QIFImportWindow *wind);
 void gnc_ui_qif_import_account_rematch_cb (GtkButton *button, gpointer user_data);
 
 void gnc_ui_qif_import_category_match_prepare (GtkAssistant *assistant, gpointer user_data);
-static gboolean gnc_ui_qif_import_skip_category_match (QIFImportWindow *wind);
 void gnc_ui_qif_import_category_doc_prepare (GtkAssistant *assistant, gpointer user_data);
 static gboolean gnc_ui_qif_import_skip_category_doc (QIFImportWindow *wind);
 void gnc_ui_qif_import_category_rematch_cb (GtkButton *button, gpointer user_data);
 
 void gnc_ui_qif_import_memo_match_prepare (GtkAssistant *assistant, gpointer user_data);
-static gboolean gnc_ui_qif_import_skip_memo_match (QIFImportWindow *wind);
 void gnc_ui_qif_import_memo_doc_prepare (GtkAssistant *assistant, gpointer user_data);
 static gboolean gnc_ui_qif_import_skip_memo_doc (QIFImportWindow *wind);
 void gnc_ui_qif_import_memo_rematch_cb (GtkButton *button, gpointer user_data);
@@ -468,7 +463,6 @@ gnc_ui_qif_import_assistant_destroy (GtkWidget *object, gpointer user_data)
 
     gtk_widget_destroy (wind->window);
 
-    scm_gc_unprotect_object (wind->imported_files);
     scm_gc_unprotect_object (wind->selected_file);
     scm_gc_unprotect_object (wind->gnc_acct_info);
     scm_gc_unprotect_object (wind->cat_display_info);
@@ -1436,20 +1430,6 @@ gnc_ui_qif_import_close_cb (GtkAssistant *gtkassistant, gpointer user_data)
     gnc_close_gui_component_by_data (ASSISTANT_QIF_IMPORT_CM_CLASS, wind);
 }
 
-
-/****************************************************************
- * gnc_ui_qif_import_assistant_get_mappings
- *
- * SCM get mappings.
- ****************************************************************/
-SCM
-gnc_ui_qif_import_assistant_get_mappings (QIFImportWindow * w)
-{
-    return scm_list_3 (w->acct_map_info,
-                       w->cat_map_info,
-                       w->memo_map_info);
-}
-
 /***************************************************************************
  *  gnc_ui_qif_import_assistant_page_forward - custom page forward function.
  *    This gives us the ability to skip pages that are not relevant.
@@ -1507,12 +1487,12 @@ gnc_ui_qif_import_assistant_skip_page (GtkAssistant *assistant, GtkWidget *page,
     else if (!g_strcmp0 (pagename, "account_name_page"))
     {
         /* Current page is account page */
-        rv = gnc_ui_qif_import_skip_account (assistant, wind);
+        rv = ! qif-selected-account-has-transactions(wind->qifData);
     }
     else if (!g_strcmp0 (pagename, "account_doc_page"))
     {
         /* Current page is  Account Doc. page */
-        rv = gnc_ui_qif_import_skip_account_doc (wind);
+        rv = !wind->show_doc_pages;
     }
     else if (!g_strcmp0 (pagename, "category_doc_page"))
     {
@@ -1522,7 +1502,7 @@ gnc_ui_qif_import_assistant_skip_page (GtkAssistant *assistant, GtkWidget *page,
     else if (!g_strcmp0 (pagename, "category_match_page"))
     {
         /* Current page is Category Match page */
-        rv = gnc_ui_qif_import_skip_category_match (wind);
+        rv = qif-category-to-display (wind);
     }
     else if (!g_strcmp0 (pagename, "memo_doc_page"))
     {
@@ -1532,7 +1512,7 @@ gnc_ui_qif_import_assistant_skip_page (GtkAssistant *assistant, GtkWidget *page,
     else if (!g_strcmp0 (pagename, "memo_match_page"))
     {
         /* Current page is Memo Match page */
-        rv = gnc_ui_qif_import_skip_memo_match (wind);
+        rv = qif-memo-to-display (wind);
     }
     else if (!g_strcmp0 (pagename, "commodity_page"))
     {
@@ -1571,88 +1551,12 @@ gnc_ui_qif_import_assistant_skip_page (GtkAssistant *assistant, GtkWidget *page,
 static void
 get_preferences (QIFImportWindow *wind)
 {
-    gchar tmp_transaction_status = 'n';
-
     g_return_if_fail (wind);
 
     /* Get the user's preference for showing documentation pages. */
     wind->show_doc_pages =
         gnc_prefs_get_bool (GNC_PREFS_GROUP, GNC_PREF_SHOW_DOC);
-
-    /* Clear / Reconcile transaction if not specified in QIF file. */
-    if (gnc_prefs_get_bool (GNC_PREFS_GROUP, GNC_PREF_DEFAULT_TRANS_STATUS_CLEARED))
-        tmp_transaction_status = 'c';
-    else if (gnc_prefs_get_bool (GNC_PREFS_GROUP, GNC_PREF_DEFAULT_TRANS_STATUS_RECONCILED))
-        tmp_transaction_status = 'y';
-
-    wind->transaction_status = SCM_MAKE_CHAR(tmp_transaction_status);
 }
-
-
-/********************************************************************
- * initialize_scheme
- *
- * Initialize all Scheme-controlled objects.
- ********************************************************************/
-static void
-initialize_scheme (QIFImportWindow *wind)
-{
-    SCM  load_map_prefs;
-    SCM  mapping_info;
-    SCM  create_ticker_map;
-
-    g_return_if_fail (wind);
-
-    /* Initialize Scheme variables. */
-    wind->imported_files        = SCM_EOL;
-    wind->selected_file         = SCM_BOOL_F;
-    wind->gnc_acct_info         = SCM_BOOL_F;
-    wind->cat_display_info      = SCM_BOOL_F;
-    wind->cat_map_info          = SCM_BOOL_F;
-    wind->acct_display_info     = SCM_BOOL_F;
-    wind->acct_map_info         = SCM_BOOL_F;
-    wind->memo_display_info     = SCM_BOOL_F;
-    wind->memo_map_info         = SCM_BOOL_F;
-    wind->security_hash         = SCM_BOOL_F;
-    wind->security_prefs        = SCM_BOOL_F;
-    wind->new_securities        = SCM_BOOL_F;
-    wind->ticker_map            = SCM_BOOL_F;
-    wind->imported_account_tree = SCM_BOOL_F;
-    wind->match_transactions    = SCM_BOOL_F;
-
-    /* Get the saved state of mappings from Quicken accounts and
-     * categories to GnuCash accounts. */
-    load_map_prefs = scm_c_eval_string ("qif-import:load-map-prefs");
-    mapping_info = scm_call_0 (load_map_prefs); /* <- gets/creates session/book */
-    wind->gnc_acct_info         = scm_list_ref (mapping_info, scm_from_int (0));
-    wind->acct_map_info         = scm_list_ref (mapping_info, scm_from_int (1));
-    wind->cat_map_info          = scm_list_ref (mapping_info, scm_from_int (2));
-    wind->memo_map_info         = scm_list_ref (mapping_info, scm_from_int (3));
-    wind->security_hash         = scm_list_ref (mapping_info, scm_from_int (4));
-    wind->security_prefs        = scm_list_ref (mapping_info, scm_from_int (5));
-
-    /* Get the initial ticker map. */
-    create_ticker_map = scm_c_eval_string ("make-ticker-map");
-    wind->ticker_map            = scm_call_0 (create_ticker_map);
-
-    /* Protect our data from garbage collection. */
-    scm_gc_protect_object (wind->imported_files);
-    scm_gc_protect_object (wind->selected_file);
-    scm_gc_protect_object (wind->gnc_acct_info);
-    scm_gc_protect_object (wind->cat_display_info);
-    scm_gc_protect_object (wind->cat_map_info);
-    scm_gc_protect_object (wind->memo_display_info);
-    scm_gc_protect_object (wind->memo_map_info);
-    scm_gc_protect_object (wind->acct_display_info);
-    scm_gc_protect_object (wind->acct_map_info);
-    scm_gc_protect_object (wind->security_hash);
-    scm_gc_protect_object (wind->security_prefs);
-    scm_gc_protect_object (wind->new_securities);
-    scm_gc_protect_object (wind->ticker_map);
-    scm_gc_protect_object (wind->imported_account_tree);
-    scm_gc_protect_object (wind->match_transactions);
-}
-
 
 /*****************************************
  * Page 0 - Intro Page Page
@@ -1874,15 +1778,16 @@ gnc_ui_qif_import_load_progress_start_cb (GtkButton * button,
     GtkAssistant *assistant = GTK_ASSISTANT(wind->window);
 
     const gchar * path_to_load;
+    boolean load_success = false;
+    char *errorString;
+    boolean parse_success = false;
+    boolean parse_warnings = false;
+    boolean ambiguous_dates = false;
 
-    SCM make_qif_file   = scm_c_eval_string ("make-qif-file");
-    SCM qif_file_load   = scm_c_eval_string ("qif-file:read-file");
     SCM qif_file_parse  = scm_c_eval_string ("qif-file:parse-fields");
-    SCM unload_qif_file = scm_c_eval_string ("qif-dialog:unload-qif-file");
     SCM parse_results   = scm_c_eval_string ("qif-file:parse-fields-results");
     SCM scm_qiffile;
     SCM imported_files = SCM_EOL;
-    SCM load_return = SCM_BOOL_F, parse_return = SCM_BOOL_F;
     SCM progress;
 
     /* Raise the busy flag so the assistant can't be canceled unexpectedly. */
@@ -1892,12 +1797,8 @@ gnc_ui_qif_import_load_progress_start_cb (GtkButton * button,
     /* Get the file name. */
     path_to_load = gtk_entry_get_text (GTK_ENTRY(wind->filename_entry));
 
-    /* Create the <qif-file> object. */
-    scm_qiffile          = scm_call_0 (make_qif_file);
-    scm_gc_unprotect_object (wind->selected_file);
-    wind->selected_file  = scm_qiffile;
-    scm_gc_protect_object (wind->selected_file);
-    imported_files       = scm_cons (scm_qiffile, wind->imported_files);
+    /* Create the qif file object. */
+    qif-make-file(wind->qifData);
 
     /* Create SCM for the progress helper. */
     progress = SWIG_NewPointerObj (wind->load_progress,
@@ -1905,28 +1806,17 @@ gnc_ui_qif_import_load_progress_start_cb (GtkButton * button,
                                    0);
 
     /* Clear any previous pause or cancel state. */
-    scm_c_eval_string ("(qif-import:reset-cancel-pause)");
+    qif-import-reset-cancel-pause(wind->qifData);
 
     /*
      * Load the file.
-     *
-     * The loader returns:
-     *  success:   ()
-     *  failure:   (#f error-message)
-     *  warning:   (#t error-message)
-     *  cancel:    #t
-     *  exception: #f
      */
 
     /* This step will fill 70% of the bar. */
     gnc_progress_dialog_push (wind->load_progress, 0.7);
-    load_return = scm_call_4 (qif_file_load,
-                              SCM_CAR(imported_files),
-                              scm_from_locale_string (path_to_load ? path_to_load : ""),
-                              wind->ticker_map,
-                              progress);
+    load_success = qif-file-read(wind->wifData, &errorString);   /* TODO needs progress dialog */
     gnc_progress_dialog_pop (wind->load_progress);
-    if (load_return == SCM_BOOL_T)
+    if (!load_success && !errorString)
     {
         /* Canceled by the user. */
 
@@ -1939,7 +1829,7 @@ gnc_ui_qif_import_load_progress_start_cb (GtkButton * button,
         wind->busy = FALSE;
         wind->load_stop = TRUE;
     }
-    else if (load_return == SCM_BOOL_F || !scm_is_list (load_return))
+    else if (!load_success)
     {
         /* A bug was detected. */
 
@@ -1947,59 +1837,31 @@ gnc_ui_qif_import_load_progress_start_cb (GtkButton * button,
         gtk_widget_set_sensitive (wind->load_pause, FALSE);
 
         /* Inform the user. */
-        gnc_progress_dialog_append_log (wind->load_progress,
-                                        _("An error occurred while loading the QIF file."));
+        gnc_progress_dialog_append_log (wind->load_progress, errorString);
         gnc_progress_dialog_set_sub (wind->load_progress, _("Failed"));
         gnc_progress_dialog_reset_value (wind->load_progress);
-        gnc_error_dialog (GTK_WINDOW(assistant), "%s",
-                          _("An error occurred while loading the QIF file."));
+        gnc_error_dialog (GTK_WINDOW(assistant), "%s", errorString);
         /* FIXME: How should we request that the user report this problem? */
 
         wind->busy = FALSE;
         wind->load_stop = TRUE;
     }
-    else if (!scm_is_null (load_return))
-    {
-        if (SCM_CAR(load_return) == SCM_BOOL_F)
-        {
-            imported_files = scm_call_2 (unload_qif_file, scm_qiffile, imported_files);
-            scm_gc_unprotect_object (wind->imported_files);
-            wind->imported_files = imported_files;
-            scm_gc_protect_object (wind->imported_files);
-
-            gnc_progress_dialog_set_sub (wind->load_progress, _("Failed"));
-            gnc_progress_dialog_reset_value (wind->load_progress);
-
-            gtk_widget_set_sensitive (wind->load_pause, FALSE);
-            wind->busy = FALSE;
-            wind->load_stop = TRUE;
-        }
-        else
-            wind->read_file_warnings = TRUE;
-    }
 
     /*
      * Parse the fields.
-     *
-     * The parser returns:
-     *   success:   ()
-     *   failure:   (#f . ((type . error) ...))
-     *   warning:   (#t . ((type . error) ...))
-     *   cancel:    #t
-     *   exception: #f
      */
 
     /* This step will fill the remainder of the bar. */
     if (!wind->load_stop)
     {
-    gnc_progress_dialog_push (wind->load_progress, 1);
-    parse_return = scm_call_2 (qif_file_parse, SCM_CAR(imported_files),
-                   progress);
-    gnc_progress_dialog_pop (wind->load_progress);
-    wind->ask_date_format = FALSE;
-    wind->date_format = NULL;
+    	gnc_progress_dialog_push (wind->load_progress, 1);
+    	parse_success = qif-file-parse(wind->qifData, &parse_warnings, &ambiguousDates, errorString);
+    	/* TODO needs progress dialog */
+    	gnc_progress_dialog_pop (wind->load_progress);
+    	wind->ask_date_format = FALSE;
+    	wind->date_format = NULL;
     }
-    if (parse_return == SCM_BOOL_T)
+    if (!parse_success && !errorString)
     {
         /* Canceled by the user. */
 
@@ -2008,7 +1870,7 @@ gnc_ui_qif_import_load_progress_start_cb (GtkButton * button,
 
         /* Unload the file. */
         gnc_progress_dialog_set_sub (wind->load_progress, _("Cleaning up"));
-        imported_files = scm_call_2 (unload_qif_file, scm_qiffile, imported_files);
+        qif-dialog:unload-qif-file(wind->qifData);
 
         /* Inform the user. */
         gnc_progress_dialog_set_sub (wind->load_progress, _("Canceled"));
@@ -2016,71 +1878,43 @@ gnc_ui_qif_import_load_progress_start_cb (GtkButton * button,
         wind->busy = FALSE;
         wind->load_stop = TRUE;
     }
-    else if (parse_return == SCM_BOOL_F || !scm_is_list(parse_return))
+    else if (parse_success && parse_warnings)
     {
-        /* A bug was detected. */
+    	/* TODO This needs rethinking.  This block of code asks the user for
+		 * direction if it can't parse date fields or the date fields are ambiguous. */
 
-        /* Disable the pause button. */
-        gtk_widget_set_sensitive (wind->load_pause, FALSE);
+		/* A warning means that (potentially) the date format is
+		 * ambiguous.  So search the results for the "date" type and if
+		 * it's found, set up the format selector page. */
+		if (ambiguousDates)
+		{
+			GtkComboBox *combo_box;
+			GtkTreeModel *model;
+			GtkTreeIter iter;
 
-        /* Unload the file. */
-        gnc_progress_dialog_set_sub (wind->load_progress, _("Cleaning up"));
-        imported_files = scm_call_2 (unload_qif_file, scm_qiffile, imported_files);
+			/* Block the date call back */
+			g_signal_handlers_block_by_func (wind->date_format_combo, gnc_ui_qif_import_date_valid_cb, wind);
 
-        /* Inform the user. */
-        gnc_progress_dialog_append_log (wind->load_progress,
-                                        _("A bug was detected while parsing the QIF file."));
-        gnc_progress_dialog_set_sub (wind->load_progress, _("Failed"));
-        gnc_progress_dialog_reset_value (wind->load_progress);
-        gnc_error_dialog (GTK_WINDOW(assistant), "%s",
-                          _("A bug was detected while parsing the QIF file."));
-        /* FIXME: How should we request that the user report this problem? */
+			/* Clear the date format combo box. */
+			combo_box = GTK_COMBO_BOX(wind->date_format_combo);
+			model = gtk_combo_box_get_model (combo_box);
+			gtk_list_store_clear (GTK_LIST_STORE(model));
 
-        wind->busy = FALSE;
-        wind->load_stop = TRUE;
-    }
-    else if (!scm_is_null (parse_return))
-    {
-        /* Are there only warnings? */
-        if (SCM_CAR(parse_return) == SCM_BOOL_T)
-        {
-            SCM date_formats;
+			gtk_combo_box_set_active (GTK_COMBO_BOX(wind->date_format_combo), -1);
 
-            /* A warning means that (potentially) the date format is
-             * ambiguous.  So search the results for the "date" type and if
-             * it's found, set up the format selector page. */
-            if ((date_formats = scm_call_2 (parse_results,
-                                            SCM_CDR(parse_return),
-                                            scm_from_locale_symbol ("date"))) != SCM_BOOL_F)
-            {
-                GtkComboBox *combo_box;
-                GtkTreeModel *model;
-                GtkTreeIter iter;
+			/* Add the formats for the user to select from. */
+			while (scm_is_list (date_formats) && !scm_is_null (date_formats))
+			{
+				gtk_list_store_append (GTK_LIST_STORE(model), &iter);
+				gtk_list_store_set (GTK_LIST_STORE(model), &iter, 0, gnc_scm_symbol_to_locale_string (SCM_CAR(date_formats)), -1);
 
-                /* Block the date call back */
-                g_signal_handlers_block_by_func (wind->date_format_combo, gnc_ui_qif_import_date_valid_cb, wind);
+				date_formats = SCM_CDR(date_formats);
+			}
 
-                /* Clear the date format combo box. */
-                combo_box = GTK_COMBO_BOX(wind->date_format_combo);
-                model = gtk_combo_box_get_model (combo_box);
-                gtk_list_store_clear (GTK_LIST_STORE(model));
+			/* Unblock the date call back */
+			g_signal_handlers_unblock_by_func (wind->date_format_combo, gnc_ui_qif_import_date_valid_cb, wind);
 
-                gtk_combo_box_set_active (GTK_COMBO_BOX(wind->date_format_combo), -1);
-
-                /* Add the formats for the user to select from. */
-                while (scm_is_list (date_formats) && !scm_is_null (date_formats))
-                {
-                    gtk_list_store_append (GTK_LIST_STORE(model), &iter);
-                    gtk_list_store_set (GTK_LIST_STORE(model), &iter, 0, gnc_scm_symbol_to_locale_string (SCM_CAR(date_formats)), -1);
-
-                    date_formats = SCM_CDR(date_formats);
-                }
-
-                /* Unblock the date call back */
-                g_signal_handlers_unblock_by_func (wind->date_format_combo, gnc_ui_qif_import_date_valid_cb, wind);
-
-                wind->ask_date_format = TRUE;
-            }
+			wind->ask_date_format = TRUE;
             wind->load_stop = TRUE;
         }
         else
@@ -2175,11 +2009,7 @@ gnc_ui_qif_import_skip_date_format (GtkAssistant *assistant, QIFImportWindow *wi
 static void
 qif_import_reparse_dates (QIFImportWindow* wind)
 {
-    SCM  reparse_dates   = scm_c_eval_string ("qif-file:reparse-dates");
-    SCM format_sym = scm_from_locale_symbol (wind->date_format);
-
-    /* Reparse the dates using the selected format. */
-    scm_call_2 (reparse_dates, wind->selected_file, format_sym);
+    qif-reparse-date(wind->qifData, wind->date_format);
     g_free (wind->date_format);
     wind->date_format = NULL;
     wind->ask_date_format = FALSE;
@@ -2223,10 +2053,8 @@ gnc_ui_qif_import_account_prepare (GtkAssistant  *assistant, gpointer user_data)
 {
     QIFImportWindow * wind = user_data;
 
-    SCM  check_from_acct = scm_c_eval_string ("qif-file:check-from-acct");
-
     /* make sure there is a file selected, may have come back */
-    if (wind->selected_file == SCM_BOOL_F)
+    if (!qif-is-selected-file(wind->qifData))
     {
         GtkAssistant *assistant = GTK_ASSISTANT(wind->window);
         gtk_entry_set_text (GTK_ENTRY(wind->filename_entry), "");
@@ -2235,32 +2063,16 @@ gnc_ui_qif_import_account_prepare (GtkAssistant  *assistant, gpointer user_data)
     else
     {
         /* Determine the next page to display. */
-        if (scm_call_1 (check_from_acct, wind->selected_file) != SCM_BOOL_T)
+        if (! qif-selected-account-has-transactions(wind->qifData))
         {
             /* There is an account name missing. Ask the user to provide one. */
-            SCM default_acct = scm_c_eval_string ("qif-file:path-to-accountname");
             gchar * default_acctname = NULL;
 
-            default_acctname = gnc_scm_call_1_to_string (default_acct, wind->selected_file);
+            default_acctname = (gchar *)qif-selected-account-name(wind->qifData);
             gtk_entry_set_text (GTK_ENTRY(wind->acct_entry), default_acctname);
             g_free (default_acctname);
         }
     }
-}
-
-/********************************************************************
- * gnc_ui_qif_import_skip_account
- *
- * Determine if we need the import account page
- ********************************************************************/
-static gboolean
-gnc_ui_qif_import_skip_account (GtkAssistant *assistant, QIFImportWindow *wind)
-{
-    SCM  check_from_acct = scm_c_eval_string ("qif-file:check-from-acct");
-    if (wind->selected_file != SCM_BOOL_F &&
-        scm_call_1 (check_from_acct, wind->selected_file) == SCM_BOOL_T)
-        return TRUE;
-    return FALSE;
 }
 
 /********************************************************************
@@ -2338,17 +2150,11 @@ gnc_ui_qif_import_loaded_files_prepare (GtkAssistant *assistant,
     QIFImportWindow * wind = user_data;
 
     const gchar * acct_name = gtk_entry_get_text (GTK_ENTRY(wind->acct_entry));
-    SCM    fix_default = scm_c_eval_string ("qif-import:fix-from-acct");
-    SCM    scm_name;
 
-    if (wind->selected_file != SCM_BOOL_F)
-    {
-        scm_name = scm_from_utf8_string (acct_name ? acct_name : "");
-        scm_call_2 (fix_default, wind->selected_file, scm_name);
+    qif-fix-from-account(wind->qifData, acct_name);
 
-        /* Enable the assistant "Next" Button */
-        mark_page_complete (assistant, TRUE);
-    }
+    /* Enable the assistant "Next" Button */
+    mark_page_complete (assistant, TRUE);
 
     update_file_page (wind);
 }
@@ -2383,24 +2189,9 @@ gnc_ui_qif_import_unload_file_cb (GtkButton * button,
 {
     QIFImportWindow * wind = user_data;
 
-    SCM unload_qif_file = scm_c_eval_string ("qif-dialog:unload-qif-file");
-    SCM imported_files;
+    qif-unload-selected-file(wind->qifData);
 
-    if (wind->selected_file != SCM_BOOL_F)
-    {
-        imported_files =
-            scm_call_2 (unload_qif_file, wind->selected_file, wind->imported_files);
-
-        scm_gc_unprotect_object (wind->imported_files);
-        wind->imported_files = imported_files;
-        scm_gc_protect_object (wind->imported_files);
-
-        scm_gc_unprotect_object (wind->selected_file);
-        wind->selected_file = SCM_BOOL_F;
-        scm_gc_protect_object (wind->selected_file);
-
-        update_file_page (wind);
-    }
+    update_file_page (wind);
 }
 
 
@@ -2412,9 +2203,8 @@ gnc_ui_qif_import_unload_file_cb (GtkButton * button,
 static void
 update_file_page (QIFImportWindow * wind)
 {
-    SCM       loaded_file_list = wind->imported_files;
-    SCM       qif_file_path;
-    int       row = 0;
+    int row = 0;
+
     GtkTreeView *view;
     GtkListStore *store;
     GtkTreeIter iter;
@@ -2422,38 +2212,37 @@ update_file_page (QIFImportWindow * wind)
     GtkTreeRowReference *reference = NULL;
 
     GtkAssistant *assistant = GTK_ASSISTANT(wind->window);
-    gint num_of_files = 0;
 
     /* clear the list */
     view = GTK_TREE_VIEW(wind->selected_file_view);
     store = GTK_LIST_STORE(gtk_tree_view_get_model (view));
     gtk_list_store_clear (store);
-    qif_file_path = scm_c_eval_string ("qif-file:path");
 
     mark_page_complete (assistant, FALSE);
 
-    while (!scm_is_null (loaded_file_list))
+    char *currentFileName;
+    boolean currentFileSelected;
+    boolean filesToProcess = qif-get-first-loaded-file(wind->qifData, &currentFileName,
+    		&currentFileSelected);
+
+    while (filesToProcess)
     {
-        gchar *row_text    = NULL;
-        SCM    scm_qiffile = SCM_BOOL_F;
-
-        scm_qiffile = SCM_CAR(loaded_file_list);
-        row_text = gnc_scm_call_1_to_string (qif_file_path, scm_qiffile);
-
         gtk_list_store_append (store, &iter);
         gtk_list_store_set (store, &iter,
                             FILENAME_COL_INDEX, row++,
-                            FILENAME_COL_NAME, row_text,
+                            FILENAME_COL_NAME, currentFileName,
                             -1);
         g_free (row_text);
 
-        if (scm_qiffile == wind->selected_file)
+        if (currentFileSelected)
         {
             path = gtk_tree_model_get_path (GTK_TREE_MODEL(store), &iter);
             reference = gtk_tree_row_reference_new (GTK_TREE_MODEL(store), path);
             gtk_tree_path_free (path);
         }
-        loaded_file_list = SCM_CDR(loaded_file_list);
+
+        filesToProcess = qif-get-next-loaded-file(wind->qifData, &currentFileName,
+            &currentFileSelected);
     }
 
     if (reference)
@@ -2468,10 +2257,8 @@ update_file_page (QIFImportWindow * wind)
         gtk_tree_row_reference_free (reference);
     }
 
-    /* get the number of files in the list */
-    num_of_files = gtk_tree_model_iter_n_children (GTK_TREE_MODEL(store), NULL);
-
-    if (num_of_files > 0)
+    /* if there are files in the list */
+    if (gtk_tree_model_iter_n_children (GTK_TREE_MODEL(store), NULL) > 0)
         mark_page_complete (assistant, TRUE);
     else
     {
@@ -2508,17 +2295,6 @@ gnc_ui_qif_import_account_doc_prepare (GtkAssistant *assistant,
 {
     /* Enable the Assistant "Next" Button */
     mark_page_complete (assistant, TRUE);
-}
-
-/********************************************************************
- * gnc_ui_qif_import_skip_account_doc
- *
- * Determine if we need the import account doc page
- ********************************************************************/
-static gboolean
-gnc_ui_qif_import_skip_account_doc (QIFImportWindow *wind)
-{
-    return !wind->show_doc_pages;
 }
 
 /******************************************
@@ -2563,10 +2339,10 @@ gnc_ui_qif_import_account_rematch_cb (GtkButton *button, gpointer user_data)
     g_return_if_fail (wind);
 
     rematch_line (wind,
-                  gtk_tree_view_get_selection (GTK_TREE_VIEW(wind->acct_view)),
-                  wind->acct_display_info,
-                  wind->acct_map_info,
-                  update_account_page);
+        gtk_tree_view_get_selection (GTK_TREE_VIEW(wind->acct_view)),
+		qif-get-account-display-info(wind->qifData),
+	    qif-get-account-map-entry(wind->qifData),
+        update_account_page);
 }
 
 
@@ -2598,10 +2374,8 @@ gnc_ui_qif_import_skip_category_doc (QIFImportWindow *wind)
         return TRUE;
 
     /* If there are no category mappings, jump the doc page. */
-    if (scm_is_list (wind->cat_display_info) && scm_is_null (wind->cat_display_info))
-        return TRUE;
-
-    return FALSE;
+    if (wind)
+        qif-category-to-display(*wind);
 }
 
 
@@ -2623,21 +2397,6 @@ gnc_ui_qif_import_category_match_prepare (GtkAssistant *assistant,
     mark_page_complete (assistant, TRUE);
 }
 
-/********************************************************************
- * gnc_ui_qif_import_skip_category_match
- *
- * Determine if we need the import category match page
- ********************************************************************/
-static gboolean
-gnc_ui_qif_import_skip_category_match (QIFImportWindow *wind)
-{
-    /* If there are no category mappings, jump this step. */
-    if (scm_is_list (wind->cat_display_info) && scm_is_null (wind->cat_display_info))
-        return TRUE;
-
-    return FALSE;
-}
-
 
 /****************************************************************
  * gnc_ui_qif_import_category_rematch_cb
@@ -2654,10 +2413,10 @@ gnc_ui_qif_import_category_rematch_cb (GtkButton *button, gpointer user_data)
     g_return_if_fail (wind);
 
     rematch_line (wind,
-                  gtk_tree_view_get_selection (GTK_TREE_VIEW(wind->cat_view)),
-                  wind->cat_display_info,
-                  wind->cat_map_info,
-                  update_category_page);
+        gtk_tree_view_get_selection (GTK_TREE_VIEW(wind->cat_view)),
+		qif-get-category-display-info(wind->qifData),
+		qif-get-category-map-entry(wind->qifData),
+        update_category_page);
 }
 
 
@@ -2688,10 +2447,8 @@ gnc_ui_qif_import_skip_memo_doc (QIFImportWindow *wind)
         return TRUE;
 
     /* If there are no memo mappings, jump the doc page. */
-    if (scm_is_list (wind->memo_display_info) && scm_is_null (wind->memo_display_info))
-        return TRUE;
-
-    return FALSE;
+    if (wind)
+    	qif-memo-to-display(*wind);
 }
 
 
@@ -2712,21 +2469,6 @@ gnc_ui_qif_import_memo_match_prepare (GtkAssistant *assistant, gpointer user_dat
     mark_page_complete (assistant, TRUE);
 }
 
-/********************************************************************
- * gnc_ui_qif_import_skip_memo_match
- *
- * Determine if we need the import memo match page
- ********************************************************************/
-static gboolean
-gnc_ui_qif_import_skip_memo_match (QIFImportWindow *wind)
-{
-    /* If there are no memo mappings, jump this step. */
-    if (scm_is_list (wind->memo_display_info) && scm_is_null (wind->memo_display_info))
-        return TRUE;
-
-    return FALSE;
-}
-
 
 /****************************************************************
  * gnc_ui_qif_import_memo_rematch_cb
@@ -2743,10 +2485,10 @@ gnc_ui_qif_import_memo_rematch_cb (GtkButton *button, gpointer user_data)
     g_return_if_fail (wind);
 
     rematch_line (wind,
-                  gtk_tree_view_get_selection (GTK_TREE_VIEW(wind->memo_view)),
-                  wind->memo_display_info,
-                  wind->memo_map_info,
-                  update_memo_page);
+    		gtk_tree_view_get_selection (GTK_TREE_VIEW(wind->memo_view)),
+			qif-get-memo-display-info(wind->qifData),
+			qif-get-memo-map-entry(wind->qifData),
+            update_memo_page);
 }
 
 
@@ -2805,34 +2547,7 @@ gnc_ui_qif_import_currency_prepare (GtkAssistant *assistant, gpointer user_data)
 static gboolean
 gnc_ui_qif_import_new_securities (QIFImportWindow * wind)
 {
-    SCM updates;
-    SCM update_securities = scm_c_eval_string ("qif-import:update-security-hash");
-
-    /* Get a list of any new QIF securities since the previous call. */
-    updates = scm_call_4 (update_securities,
-                          wind->security_hash,
-                          wind->ticker_map,
-                          wind->acct_map_info,
-                          wind->security_prefs);
-    if (updates != SCM_BOOL_F)
-    {
-        /* A list of new QIF securities was returned. Save it. */
-        scm_gc_unprotect_object (wind->new_securities);
-        if (wind->new_securities != SCM_BOOL_F)
-            /* There is an existing list, so append the new list. */
-            wind->new_securities = scm_append (scm_list_2 (wind->new_securities,
-                                               updates));
-        else
-            wind->new_securities = updates;
-        scm_gc_protect_object (wind->new_securities);
-
-        return TRUE;
-    }
-
-    if (wind->new_securities != SCM_BOOL_F)
-        return TRUE;
-
-    return FALSE;
+    return (qif-update-security-hash(wind->qifData));
 }
 
 
@@ -2916,7 +2631,7 @@ gnc_ui_qif_import_commodity_prepare (GtkAssistant *assistant, gpointer user_data
                         gnc_ui_qif_import_commodity_all_notebook_pages_complete (wind));
 
     /* If there are new securities, prepare the security pages. */
-    if (wind->new_securities != SCM_BOOL_F)
+    if (qif-new-securities(wind->qifData))
     {
         wind->timeout_id = 0;
 
@@ -2938,8 +2653,6 @@ gnc_ui_qif_import_skip_commodity (QIFImportWindow *wind)
 {
     return !gnc_ui_qif_import_new_securities (wind);
 }
-
-
 
 /*********************************
  * gnc_ui_qif_import_comm_valid
@@ -3040,7 +2753,9 @@ gnc_ui_qif_import_comm_changed_cb (GtkWidget *widget, gpointer user_data)
                         gnc_ui_qif_import_comm_valid (assistant, user_data));
 }
 
-
+/*************************************
+ * do_page_check
+ ************************************/
 static gboolean
 do_page_check (gpointer user_data)
 {
@@ -3087,19 +2802,12 @@ gnc_ui_qif_import_convert_progress_pause_cb (GtkButton * button,
         gpointer user_data)
 {
     QIFImportWindow *wind = user_data;
-    SCM toggle_pause      = scm_c_eval_string ("qif-import:toggle-pause");
-    SCM progress;
 
     if (!wind->busy)
         return;
 
-    /* Create SCM for the progress helper. */
-    progress = SWIG_NewPointerObj (wind->convert_progress,
-                                   SWIG_TypeQuery ("_p__GNCProgressDialog"),
-                                   0);
-
     /* Pause (or resume) the currently running operation. */
-    scm_call_1 (toggle_pause, progress);
+    qif-clear-pause-cancel(wind->qifData);
 
     /* Swap the button label between pause and resume. */
     if (strcmp (gtk_button_get_label (button), _("_Resume")))
@@ -3124,17 +2832,9 @@ void
 gnc_ui_qif_import_convert_progress_start_cb (GtkButton * button,
         gpointer user_data)
 {
-    QIFImportWindow   *wind = user_data;
+    QIFImportWindow *wind = user_data;
     GtkAssistant *assistant = GTK_ASSISTANT(wind->window);
-
-    SCM qif_to_gnc      = scm_c_eval_string ("qif-import:qif-to-gnc");
-    SCM find_duplicates = scm_c_eval_string ("gnc:account-tree-find-duplicates");
-    SCM retval;
-
-    /* SCM for the progress dialog. */
-    SCM progress = SWIG_NewPointerObj (wind->convert_progress,
-                                       SWIG_TypeQuery ("_p__GNCProgressDialog"),
-                                       0);
+    gboolean retval;
 
     /* The default currency. */
     const gchar *currname = gtk_entry_get_text (GTK_ENTRY(gtk_bin_get_child (
@@ -3146,38 +2846,24 @@ gnc_ui_qif_import_convert_progress_start_cb (GtkButton * button,
     gtk_widget_set_sensitive (wind->convert_start, FALSE);
 
     /* Clear any previous pause or cancel state. */
-    scm_c_eval_string ("(qif-import:reset-cancel-pause)");
+    qif-clear-pause-cancel(wind->qifData);
 
     /* Update the commodities. */
     gnc_ui_qif_import_commodity_update (wind);
 
     /*
-     * Convert the QIF data into GnuCash data.
-     *
-     * A Scheme function does all the work.  The return value is the
-     * root account of an account tree containing all the new accounts
-     * and transactions. Upon failure, #f is returned. If the user
-     * cancels, #t is returned.
+     * Convert the QIF data into GnuCash data.  True is returned if the
+     * import is cancelled.
      */
 
     /* This step will fill 70% of the bar. */
     gnc_progress_dialog_push (wind->convert_progress, 0.7);
-    retval = scm_apply (qif_to_gnc,
-                        scm_list_n (wind->imported_files,
-                                    wind->acct_map_info,
-                                    wind->cat_map_info,
-                                    wind->memo_map_info,
-                                    wind->security_hash,
-                                    scm_from_utf8_string (currname ? currname : ""),
-                                    wind->transaction_status,
-                                    progress,
-                                    SCM_UNDEFINED),
-                        SCM_EOL);
+    retval = qif-convert-to-gnc(wind->qifData);
     gnc_progress_dialog_pop (wind->convert_progress);
 
-    if (retval == SCM_BOOL_T)
+    if (retval)
     {
-        /* Canceled by the user. */
+        /* Canceled by the user or an error was encountered. */
 
         /* Disable the pause button. */
         gtk_widget_set_sensitive (wind->convert_pause, FALSE);
@@ -3193,96 +2879,23 @@ gnc_ui_qif_import_convert_progress_start_cb (GtkButton * button,
         wind->busy = FALSE;
         wind->load_stop = TRUE;
     }
-    else if (retval == SCM_BOOL_F)
+
+    if (FALSE == wind->load_stop)
     {
-        /* An bug was encountered during conversion. */
-
-        /* Disable the pause button. */
-        gtk_widget_set_sensitive (wind->convert_pause, FALSE);
-
-        /* Remove any converted data. */
-        gnc_progress_dialog_set_sub (wind->convert_progress, _("Cleaning up"));
-        gnc_ui_qif_import_convert_undo (wind);
-
-        /* Inform the user. */
-        gnc_progress_dialog_append_log (wind->convert_progress,
-                                        _("A bug was detected while converting the QIF data."));
-        gnc_progress_dialog_set_sub (wind->convert_progress, _("Failed"));
-        gnc_progress_dialog_reset_value (wind->convert_progress);
-        gnc_error_dialog (GTK_WINDOW(assistant), "%s",
-                          _("A bug was detected while converting the QIF data."));
-        /* FIXME: How should we request that the user report this problem? */
-
-        wind->busy = FALSE;
-        wind->load_stop = TRUE;
-    }
-    else if (scm_is_symbol (retval))
-    {
-        /* An error was encountered during conversion. */
-
-        /* Disable the pause button. */
-        gtk_widget_set_sensitive (wind->convert_pause, FALSE);
-
-        /* Remove any converted data. */
-        gnc_progress_dialog_set_sub (wind->convert_progress, _("Cleaning up"));
-        gnc_ui_qif_import_convert_undo (wind);
-
-        /* Inform the user. */
-        gnc_progress_dialog_set_sub (wind->convert_progress, _("Failed"));
-        gnc_progress_dialog_reset_value (wind->convert_progress);
-
-        wind->busy = FALSE;
-        wind->load_stop = TRUE;
-    }
-    if (wind->load_stop == FALSE)
-    {
-        /* Save the imported account tree. */
-        scm_gc_unprotect_object (wind->imported_account_tree);
-        wind->imported_account_tree = retval;
-        scm_gc_protect_object (wind->imported_account_tree);
-
         /*
          * Detect potentially duplicated transactions.
          */
 
         /* This step will fill the remainder of the bar. */
         gnc_progress_dialog_push (wind->convert_progress, 1);
-        retval = scm_call_3 (find_duplicates,
-                             scm_c_eval_string ("(gnc-get-current-root-account)"),
-                             wind->imported_account_tree, progress);
+        retval = qif-account-tree-find-duplicates(wind->qifData);
         gnc_progress_dialog_pop (wind->convert_progress);
 
-        /* Save the results. */
-        scm_gc_unprotect_object (wind->match_transactions);
-        wind->match_transactions = retval;
-        scm_gc_protect_object (wind->match_transactions);
-
-        if (retval == SCM_BOOL_T)
+        if (retval)
         {
-            /* Canceled by the user. */
+            /* Canceled by the user or an error was detected. */
             gtk_widget_set_sensitive (wind->convert_pause, FALSE);
             gnc_progress_dialog_set_sub (wind->convert_progress, _("Canceling"));
-            wind->busy = FALSE;
-            wind->load_stop = TRUE;
-        }
-        else if (retval == SCM_BOOL_F)
-        {
-            /* An error occurred during duplicate checking. */
-
-            /* Remove any converted data. */
-            gnc_progress_dialog_set_sub (wind->convert_progress, _("Cleaning up"));
-            gnc_ui_qif_import_convert_undo (wind);
-
-            /* Inform the user. */
-            gnc_progress_dialog_append_log (wind->convert_progress,
-                                            _("A bug was detected while detecting duplicates."));
-            gnc_progress_dialog_set_sub (wind->convert_progress, _("Failed"));
-            gnc_progress_dialog_reset_value (wind->convert_progress);
-            gnc_error_dialog (GTK_WINDOW(assistant), "%s",
-                              _("A bug was detected while detecting duplicates."));
-            /* FIXME: How should we request that the user report this problem? */
-
-            gtk_widget_set_sensitive (wind->convert_pause, FALSE);
             wind->busy = FALSE;
             wind->load_stop = TRUE;
         }
@@ -3294,7 +2907,7 @@ gnc_ui_qif_import_convert_progress_start_cb (GtkButton * button,
     gtk_widget_set_sensitive (wind->convert_pause, FALSE);
     gtk_widget_set_sensitive (wind->convert_start, FALSE);
 
-    if (wind->load_stop == FALSE)
+    if (FALSE == wind->load_stop)
     {
         /* The conversion completed successfully. */
         gnc_progress_dialog_set_sub (wind->convert_progress,
@@ -3376,10 +2989,7 @@ gnc_ui_qif_import_skip_duplicates_doc (QIFImportWindow *wind)
         return TRUE;
 
     /* Don't show doc page if there are no duplicates */
-    if (scm_is_null (wind->match_transactions))
-        return TRUE;
-
-    return FALSE;
+    return !qif-get-first-match-transaction(wind->qifData))
 }
 
 /**********************************************
@@ -3413,22 +3023,15 @@ gnc_ui_qif_import_duplicates_match_prepare (GtkAssistant *assistant,
         store = GTK_LIST_STORE(gtk_tree_view_get_model (view));
         gtk_list_store_clear (store);
 
-        if (!scm_is_list (wind->match_transactions))
-            return;
-
         /* Loop through the list of new, potentially duplicate transactions. */
         duplicates = wind->match_transactions;
-        while (!scm_is_null (duplicates))
+        gnc_xtn = qif-get-first-match-transaction(wind->qifData);
+        while (gnc_xtn)
         {
             gdouble amount_gd = 0;
             time64 send_time = 0;
             char datebuff [MAX_DATE_LENGTH + 1];
             memset (datebuff, 0, MAX_DATE_LENGTH);
-            current_xtn = SCM_CAAR(duplicates);
-#define FUNC_NAME "xaccTransCountSplits"
-            gnc_xtn = SWIG_MustGetPtr (current_xtn,
-                                       SWIG_TypeQuery ("_p_Transaction"), 1, 0);
-#undef FUNC_NAME
             if (xaccTransCountSplits (gnc_xtn) > 2)
                 amount_str = _("(split)");
             else
@@ -3453,7 +3056,7 @@ gnc_ui_qif_import_duplicates_match_prepare (GtkAssistant *assistant,
              QIF_TRANS_COL_AMOUNT_DOUBLE, amount_gd, // used for sorting
              -1);
 
-            duplicates = SCM_CDR(duplicates);
+            gnc_xtn = qif-get-next-match-transaction(wind->qifData);
         }
         selection = gtk_tree_view_get_selection (view);
         path = gtk_tree_path_new_from_indices (0, -1);
@@ -3474,7 +3077,7 @@ static gboolean
 gnc_ui_qif_import_skip_duplicates_match (QIFImportWindow *wind)
 {
     /* Don't show page if there are no duplicates */
-    return scm_is_null (wind->match_transactions);
+    return !qif-duplicate-transactions (wind->qifData);
 }
 
 
@@ -3505,36 +3108,16 @@ gnc_ui_qif_import_finish_cb (GtkAssistant *assistant,
 {
     QIFImportWindow * wind = user_data;
 
-    SCM save_map_prefs = scm_c_eval_string ("qif-import:save-map-prefs");
-    SCM cat_and_merge = scm_c_eval_string ("gnc:account-tree-catenate-and-merge");
-    SCM prune_xtns = scm_c_eval_string ("gnc:prune-matching-transactions");
-    SCM scm_result;
-
     GncPluginPage *page;
     gboolean acct_tree_found = FALSE;
 
     gnc_suspend_gui_refresh ();
 
-    /* Prune any imported transactions that were determined to be duplicates. */
-    if (wind->match_transactions != SCM_BOOL_F)
-        scm_call_1 (prune_xtns, wind->match_transactions);
-
-    /* Merge the imported account tree with the existing one. */
-    if (wind->imported_account_tree != SCM_BOOL_F)
-        scm_call_2 (cat_and_merge,
-                   scm_c_eval_string ("(gnc-get-current-root-account)"),
-                   wind->imported_account_tree);
+    gboolean preferences_saved = qif-apply-import (wind->qifData)
 
     gnc_resume_gui_refresh ();
 
-    /* Save the user's mapping preferences. */
-    scm_result = scm_apply (save_map_prefs,
-                            scm_list_5 (wind->acct_map_info, wind->cat_map_info,
-                                        wind->memo_map_info, wind->security_hash,
-                                        wind->security_prefs),
-                            SCM_EOL);
-
-    if (scm_result == SCM_BOOL_F)
+    if (!preferences_saved)
         gnc_warning_dialog (GTK_WINDOW(assistant), "%s",
                             _("GnuCash was unable to save your mapping preferences."));
 
@@ -3941,11 +3524,6 @@ gnc_ui_qif_import_assistant_make (QIFImportWindow *qif_win)
     /* Get all user preferences related to QIF importing. */
     get_preferences (qif_win);
 
-    /* Set up the Scheme side of things. Note that if a session/book did not
-     * exist prior to this function, it is created within scheme function
-     * "qif-import:load-map-prefs", so we need to have set the flag previously */
-    initialize_scheme (qif_win);
-
     /* Get all interesting builder-defined widgets. */
     get_assistant_widgets (qif_win, builder);
     GtkAssistant *assistant = GTK_ASSISTANT(qif_win->window);
@@ -4007,13 +3585,6 @@ gnc_file_qif_import (void)
 {
     QIFImportWindow *qif_win;
     gint component_id;
-    SCM  has_regex = scm_c_eval_string ("(defined? 'make-regexp)");
-
-    if (scm_is_false(has_regex) == 1)
-    {
-        gnc_warning_dialog(NULL, _("QIF import requires guile with regex support."));
-        return;
-    }
 
     qif_win = g_new0 (QIFImportWindow, 1);
 

@@ -366,6 +366,10 @@ gnucash/import-export/ofx/gschemas/org.gnucash.GnuCash.dialogs.import.ofx.gschem
 gnucash/import-export/qif-imp/assistant-qif-import.c
 gnucash/import-export/qif-imp/dialog-account-picker.c
 gnucash/import-export/qif-imp/gnc-plugin-qif-import.c
+gnucash/import-export/qif-imp/orig/assistant-qif-import.c
+gnucash/import-export/qif-imp/orig/dialog-account-picker.c
+gnucash/import-export/qif-imp/orig/gnc-plugin-qif-import.c
+gnucash/import-export/qif-imp/qif-c-api.cpp
 gnucash/import-export/qif-imp/qif-dialog-utils.scm
 gnucash/import-export/qif-imp/qif-file.scm
 gnucash/import-export/qif-imp/qif-guess-map.scm
