@@ -57,51 +57,56 @@ struct QifMapEntry;
  * save the user's map preferences  qif-import:save-map-prefs
  * returns true if the map preferences could be saved.
  */
-gboolean qif-apply-import (QifData &qif);
+gboolean qif_apply_import (QifData &qif);
 
 /*
  * returns true if any duplicate transactions have been found
  */
-gboolean qif-duplicate-transactions (QifData &qif);
+gboolean qif_duplicate_transactions (QifData &qif);
 
 /*
- * Return the first matching transaction or null if there are none.
+ * qif-import:refresh-match-selection
  */
-Transaction * qif-get-first-match-transaction(QifData &qif);
+void qif_set_match_transactions(QifData &qif, int transaction_index);
 
 /*
- * Return the next matching transaction or null if there are none.
+ * Return the first duplicate transaction or null if there are none.
  */
-Transaction * qif-get-next-match-transaction(QifData &qif);
+Transaction * qif_get_first_duplicate_transaction(QifData &qif, boolean &selected);
+
+/*
+ * Return the next duplicate transaction or null if there are none.
+ */
+Transaction * qif_get_next_duplicate_transaction(QifData &qif, boolean &selected);
 
 /*
  * Returns true if cancelled by user.
  */
-gboolean qif-convert-to-gnc(QifData &qif);
+gboolean qif_convert_to_gnc(QifData &qif);
 
 /*
  * Returns true if cancelled by user.
  */
-gboolean qif-account-tree-find-duplicates(QifData &qif);
+gboolean qif_account_tree_find_duplicates(QifData &qif);
 
 /*
  * Clears pause and cancel states for import.
  */
-void qif-clear-pause-cancel(QifData &qif);
+void qif_clear_pause_cancel(QifData &qif);
 
 /*
  * Either sets or unsets the pause.
  */
-void qif-toggle-pause(QifData &qif);
+void qif_toggle_pause(QifData &qif);
 
-gboolean qif-new-securities(QifData &qif);
+gboolean qif_new_securities(QifData &qif);
 
 /*
  * Returns true if there are updates.  It should update the
  * internal list of securities that was formerly stored in the
  * UI data.
  */
-gboolean qif-update-security-hash(QifData &qif);
+gboolean qif_update_security_hash(QifData &qif);
 
 /*
  * Implements this from assistant-qif-import.c:
@@ -110,7 +115,7 @@ gboolean qif-update-security-hash(QifData &qif);
  *       return TRUE;
  *     return FALSE;
  */
-gboolean qif-memo-to-display(QifData &qif);
+gboolean qif_memo_to_display(QifData &qif);
 
 /*
  * Implements this from assistant-qif-import.c:
@@ -119,52 +124,73 @@ gboolean qif-memo-to-display(QifData &qif);
  *         return TRUE;
  *     return FALSE;
  */
-gboolean qif-category-to-display(QifData &qif);
+gboolean qif_category_to_display(QifData &qif);
 
-QifDisplayInfo &qif-get-account-display-info(QifData &qif);
-QifMapEntry &qif-get-account-map-entry(QifData &qif);
+QifDisplayInfo &qif_get_account_display_info(QifData &qif);
+QifMapEntry &qif_get_account_map_entry(QifData &qif);
 
-QifDisplayInfo &qif-get-category-display-info(QifData &qif);
-QifMapEntry &qif-get-category-map-entry(QifData &qif);
+QifDisplayInfo &qif_get_category_display_info(QifData &qif);
+QifMapEntry &qif_get_category_map_entry(QifData &qif);
 
-QifDisplayInfo &qif-get-memo-display-info(QifData &qif);
-QifMapEntry &qif-get-memo-map-entry(QifData &qif);
+QifDisplayInfo &qif_get_memo_display_info(QifData &qif);
+QifMapEntry &qif_get_memo_map_entry(QifData &qif);
 
-boolean qif-get-first-loaded-file(QifData &qif, char **filename, boolean &selectedFile);
-boolean qif-get-next-loaded-file(QifData &qif, char **filename, boolean &selectedFile);
+boolean qif_get_first_loaded_file(QifData &qif, char **filename, boolean &selectedFile);
+boolean qif_get_next_loaded_file(QifData &qif, char **filename, boolean &selectedFile);
 
-void qif-unload-selected-file(QifData &qif);
+void qif_unload_selected_file(QifData &qif);
 
-// qif-import:fix-from-acct
-void qif-fix-from-account(QifData &qif, char *accountName);
+/* qif-import:fix-from-acct */
+void qif_fix_from_account(QifData &qif, char *accountName);
 
-// qif-file:check-from-acct
-boolean qif-selected-account-has-transactions(QifData &qif);
+/* qif-file:check-from-acct */
+boolean qif_selected_account_has_transactions(QifData &qif);
 
-// returns true if a file has been selected
-boolean qif-is-selected-file(QifData &qif);
+/* returns true if a file has been selected */
+boolean qif_is_selected_file(QifData &qif);
 
-char *qif-selected-account-name(QifData &qif);
+char *qif_selected_account_name(QifData &qif);
 
-// qif-file:reparse-dates
-void qif-reparse-date(QifData &qif, char *format);
+/* qif-file:reparse-dates */
+void qif_reparse_date(QifData &qif, char *format);
 
-// make-qif-file
-void qif-make-file(QifData &qif);
+/* make-qif-file */
+void qif_make_file(QifData &qif);
 
-// qif-import:reset-cancel-pause
-void qif-import-reset-cancel-pause(QifData &qif);
+/* qif-import:reset-cancel-pause */
+void qif_import_reset_cancel_pause(QifData &qif);
 
-// qif-file:read-file
-boolean qif-file-read(QifData &qif, char **error);  // TODO needs progress dialog, make error safe
+/* qif-file:read-file */
+boolean qif_file_read(QifData &qif, char **error);  // TODO needs progress dialog, make error safe
 
-// qif-file:parse-fields
-boolean qif-file-parse(QifData &qif, boolean &warnings, boolean &ambiguousDates, char **error);  // TODO needs progress dialog, make error safe
+/* qif-file:parse-fields */
+boolean qif_file_parse(QifData &qif, boolean &date_ambiguity, boolean &ambiguousDates, char **error);  // TODO needs progress dialog, make error safe
 
+/* returns an array of strings that describe the possible date formats that could be
+ * used in the QIF file.  The user will select one from a dialog.  The caller must allocate an
+ * array of pointers.  Returns the number of pointers actually set.
+ */
+int qif_file_parse_date_formats(QifData &qif, char *date_formats[], int max_date_formats);
 
+/* qif-dialog:unload-qif-file.  Unloads the selected file. */
+void qif_file_unload(QifData &qif);
 
-// qif-dialog:unload-qif-file
-void qif-file-unload(QifData &qif);
+void qif_register_progress_dialog_callback(QifData &qif, void (*setProgressMessage)(char *));
+
+/* Unregister the progress dialog callback */
+void qif_unregister_progress(QifData &qif);
+
+/* Pause or resume */
+void qif_pause_parse(QifData &qif);
+
+boolean qif_file_is_loaded(QifData &qif, char *file_path_and_name);
+
+/* Cancel any operation currently in progress. */
+/* qif-import:cancel */
+void qif_cancel(QifData &qif);
+
+/* qif-import:qif-to-gnc-undo */
+void qif_file_undo(QifData &qif);
 
 #ifdef __cplusplus
 }
